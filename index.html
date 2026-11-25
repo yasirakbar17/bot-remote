@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Saklar Server Bot</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body {
+      background: #0b1120;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      width: 100%;
+      max-width: 360px;
+      background: #131c31;
+      border: 1px solid #1e293b;
+      border-radius: 20px;
+      padding: 24px 20px;
+      text-align: center;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.5);
+    }
+    .icon-ring {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      margin: 0 auto 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 32px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 2px solid #38bdf8;
+      transition: all 0.3s ease;
+    }
+    .icon-ring.starting {
+      border-color: #facc15;
+      background: rgba(250, 204, 21, 0.12);
+      animation: pulse 1.4s infinite;
+    }
+    .icon-ring.online {
+      border-color: #22c55e;
+      background: rgba(34, 197, 94, 0.15);
+    }
+    .icon-ring.offline {
+      border-color: #64748b;
+      background: rgba(100, 116, 139, 0.12);
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0.45); }
+      70% { box-shadow: 0 0 0 16px rgba(250, 204, 21, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(250, 204, 21, 0); }
+    }
+    h1 { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    p { font-size: 13px; color: #94a3b8; line-height: 1.5; margin-bottom: 20px; }
+    .badge {
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #1e293b;
+      color: #cbd5e1;
+      margin-bottom: 16px;
+    }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-green { background: #22c55e; color: #052e16; }
+    .btn-red { background: #ef4444; color: #fff; }
+    .btn-slate { background: #334155; color: #f8fafc; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon-ring starting" id="ring">⚡</div>
+    <div class="badge" id="badge">Memeriksa Status...</div>
+    <h1 id="title">Menghubungi GitHub...</h1>
+    <p id="desc">Mohon tunggu sebentar, sedang mengecek kondisi server Singapura.</p>
+    <div id="actions"></div>
+  </div>
+
+  <script>
+    (function() {
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+
+      const rawHash = window.location.hash.replace(/^#/, '');
+      const params = new URLSearchParams(rawHash);
+      let cs = params.get('cs') || localStorage.getItem('cv_cs') || '';
+      let token = params.get('t') || localStorage.getItem('cv_token') || '';
+
+      if (cs && token) {
+        localStorage.setItem('cv_cs', cs);
+        localStorage.setItem('cv_token', token);
+      }
+
+      const ring = document.getElementById('ring');
+      const badge = document.getElementById('badge');
+      const title = document.getElementById('title');
+      const desc = document.getElementById('desc');
+      const actions = document.getElementById('actions');
+
+      function closePanel() {
+        if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) {
+          window.Telegram.WebApp.close();
+        } else {
+          window.close();
+        }
+      }
+
+      if (!cs || !token) {
+        ring.className = 'icon-ring offline';
+        ring.textContent = '⚠️';
+        badge.textContent = 'Kredensial Kosong';
+        title.textContent = 'Buka Lewat Tombol di Bot';
+        desc.textContent = 'Silakan klik tombol Nyalakan langsung dari dalam chat @videoku123bot.';
+        return;
+      }
+
+      const apiBase = 'https://api.github.com/user/codespaces/' + encodeURIComponent(cs);
+      const headers = {
+        'Authorization': 'Bearer ' + token,
+        'Accept': 'application/vnd.github+json'
+      };
+
+      let autoBootTriggered = false;
+
+      async function apiCall(path, method) {
+        const res = await fetch(apiBase + path, { method: method || 'GET', headers });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      }
+
+      async function startServer() {
+        actions.innerHTML = '';
+        ring.className = 'icon-ring starting';
+        ring.textContent = '🚀';
+        badge.textContent = 'Menyalakan...';
+        title.textContent = 'Membangunkan Server...';
+        desc.textContent = 'Server GitHub Singapura sedang dinyalakan (~15 detik). Bot akan otomatis mengirim pesan saat siap!';
+        try {
+          await apiCall('/start', 'POST');
+          pollUntilAvailable();
+        } catch (err) {
+          ring.className = 'icon-ring offline';
+          ring.textContent = '❌';
+          badge.textContent = 'Gagal';
+          title.textContent = 'Gagal Menyalakan';
+          desc.textContent = 'Error: ' + err.message;
+        }
+      }
+
+      async function stopServer() {
+        actions.innerHTML = '';
+        ring.className = 'icon-ring starting';
+        ring.textContent = '💤';
+        badge.textContent = 'Mematikan...';
+        title.textContent = 'Mematikan Server...';
+        desc.textContent = 'Menghentikan Codespace agar kuota gratis tetap hemat...';
+        try {
+          await apiCall('/stop', 'POST');
+          ring.className = 'icon-ring offline';
+          ring.textContent = '😴';
+          badge.textContent = 'Server Mati (Hemat Kuota)';
+          title.textContent = 'Server Berhasil Dimatikan!';
+          desc.textContent = 'Kuota kamu aman. Tekan tombol di bawah jika ingin menyalakan lagi.';
+          actions.innerHTML = '<button class="btn btn-green" id="btn-on">⚡ Nyalakan Server Lagi</button>' +
+                              '<button class="btn btn-slate" id="btn-close">Tutup Panel</button>';
+          document.getElementById('btn-on').onclick = startServer;
+          document.getElementById('btn-close').onclick = closePanel;
+        } catch (err) {
+          desc.textContent = 'Error: ' + err.message;
+        }
+      }
+
+      async function pollUntilAvailable() {
+        for (let i = 0; i < 30; i++) {
+          await new Promise(r => setTimeout(r, 2500));
+          try {
+            const d = await apiCall('', 'GET');
+            badge.textContent = 'Status: ' + d.state;
+            if (d.state === 'Available') {
+              ring.className = 'icon-ring online';
+              ring.textContent = '🟢';
+              badge.textContent = 'Server Aktif!';
+              title.textContent = 'Bot Sudah Bangun!';
+              desc.textContent = 'Server siap! Kembali ke chat Telegram dan langsung tempel link videonya.';
+              actions.innerHTML = '<button class="btn btn-green" id="btn-back">✅ Kembali ke Chat Telegram</button>' +
+                                  '<button class="btn btn-red" id="btn-off">🛑 Matikan Server</button>';
+              document.getElementById('btn-back').onclick = closePanel;
+              document.getElementById('btn-off').onclick = stopServer;
+              return;
+            }
+          } catch (e) {}
+        }
+      }
+
+      async function init() {
+        try {
+          const d = await apiCall('', 'GET');
+          if (d.state === 'Available') {
+            ring.className = 'icon-ring online';
+            ring.textContent = '🟢';
+            badge.textContent = 'Status: Aktif (Available)';
+            title.textContent = 'Server Sedang Menyala';
+            desc.textContent = 'Bot @videoku123bot sedang aktif dan siap menerima link video.';
+            actions.innerHTML = '<button class="btn btn-green" id="btn-back">✅ Kembali ke Chat</button>' +
+                                '<button class="btn btn-red" id="btn-off">🛑 Matikan Server Sekarang</button>';
+            document.getElementById('btn-back').onclick = closePanel;
+            document.getElementById('btn-off').onclick = stopServer;
+          } else if (d.state === 'Shutdown' || d.state === 'Stopped') {
+            if (!autoBootTriggered) {
+              autoBootTriggered = true;
+              await startServer();
+            }
+          } else {
+            ring.className = 'icon-ring starting';
+            ring.textContent = '⏳';
+            badge.textContent = 'Status: ' + d.state;
+            title.textContent = 'Sedang Memproses...';
+            desc.textContent = 'Tunggu sebentar sampai status berubah menjadi Aktif.';
+            pollUntilAvailable();
+          }
+        } catch (err) {
+          ring.className = 'icon-ring offline';
+          ring.textContent = '❌';
+          badge.textContent = 'Error API';
+          title.textContent = 'Gagal Cek Server';
+          desc.textContent = err.message;
+        }
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>
