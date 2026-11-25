@@ -181,7 +181,7 @@
         return data.access_token;
       }
 
-      async function deleteFile(token) {
+      async function deleteFile() {
         player.pause();
         player.removeAttribute('src');
         videoWrap.style.display = 'none';
@@ -190,33 +190,42 @@
         statusBox.textContent = '🗑️ Menghapus video secara permanen dari Google Drive...';
         actions.innerHTML = '';
 
-        const res = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId), {
-          method: 'DELETE',
-          headers: { 'Authorization': 'Bearer ' + token }
-        });
-
-        if (res.status === 204 || res.status === 200 || res.status === 404) {
-          statusBox.innerHTML = '✅ <b>Video berhasil dihapus permanen dari Google Drive!</b><br><span style="font-size:12px;color:#94a3b8;">Penyimpanan Google Drive kamu sudah bersih kembali.</span>';
-        } else {
-          statusBox.textContent = '❌ Gagal menghapus file (HTTP ' + res.status + ').';
+        const token = await getAccessToken();
+        let lastStatus = 0;
+        for (let i = 0; i < 12; i++) {
+          const res = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId), {
+            method: 'DELETE',
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+          lastStatus = res.status;
+          if (res.status === 204 || res.status === 200 || res.status === 404) {
+            statusBox.innerHTML = '✅ <b>Video berhasil dihapus permanen dari Google Drive!</b><br><span style="font-size:12px;color:#94a3b8;">Penyimpanan Google Drive kamu sudah bersih kembali.</span>';
+            actions.innerHTML = '<button class="btn btn-close" id="btn-back">Kembali ke Chat Telegram</button>';
+            document.getElementById('btn-back').onclick = closeWin;
+            return;
+          }
+          if (res.status !== 403 && res.status !== 429 && res.status < 500) break;
+          await new Promise(r => setTimeout(r, 2500));
         }
+
+        statusBox.textContent = '❌ Gagal menghapus file (HTTP ' + lastStatus + '). Coba tekan ulang sebentar lagi.';
         actions.innerHTML = '<button class="btn btn-close" id="btn-back">Kembali ke Chat Telegram</button>';
         document.getElementById('btn-back').onclick = closeWin;
       }
 
       async function run() {
-        if (!fileId || !cid || !sec || !rt) {
+        if (!fileId) {
           statusBox.textContent = '⚠️ Data tautan tidak lengkap. Silakan klik tombol langsung dari chat bot.';
           return;
         }
         try {
-          const token = await getAccessToken();
           if (act === 'delete') {
-            await deleteFile(token);
+            await deleteFile();
             return;
           }
 
-          const streamUrl = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&access_token=' + encodeURIComponent(token);
+          // Stream langsung lewat jalur CDN Google (bebas kuota API & bebas batas waktu 1 jam)
+          const streamUrl = 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(fileId) + '&export=download&confirm=t';
           statusBox.style.display = 'none';
           videoWrap.style.display = 'block';
           speedBar.style.display = 'flex';
@@ -229,8 +238,7 @@
 
           document.getElementById('btn-del-now').onclick = async () => {
             if (confirm('Hapus video ini secara permanen dari Google Drive sekarang?')) {
-              const freshToken = await getAccessToken();
-              await deleteFile(freshToken);
+              await deleteFile();
             }
           };
           document.getElementById('btn-close-now').onclick = closeWin;
