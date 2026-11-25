@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>Google Drive Stream & Control</title>
+  <title>Google Drive Instant Player</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -19,7 +19,7 @@
     }
     .container {
       width: 100%;
-      max-width: 720px;
+      max-width: 760px;
       background: #111827;
       border: 1px solid #1f2937;
       border-radius: 18px;
@@ -44,7 +44,7 @@
     }
     video {
       width: 100%;
-      max-height: 70vh;
+      max-height: 72vh;
       display: block;
       background: #000;
     }
@@ -102,10 +102,10 @@
 <body>
   <div class="container">
     <div class="title" id="vid-title">Memuat Google Drive...</div>
-    <div class="status-box" id="status-box">⏳ Menghubungkan ke Google Drive CDN...</div>
+    <div class="status-box" id="status-box">⚡ Menyiapkan jalur streaming instan (0 detik tunggu)...</div>
 
     <div class="video-wrap" id="video-wrap">
-      <video id="player" controls autoplay playsinline preload="auto"></video>
+      <video id="player" controls autoplay playsinline preload="metadata"></video>
     </div>
 
     <div class="speeds" id="speed-bar">
@@ -125,6 +125,7 @@
         window.Telegram.WebApp.expand();
       }
 
+      const fullCurrentUrl = window.location.href;
       const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
       const fileId = params.get('id') || '';
       const act = params.get('act') || 'watch';
@@ -171,14 +172,39 @@
           refresh_token: rt,
           grant_type: 'refresh_token'
         });
-        const res = await fetch('https://oauth2.googleapis.com/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body
-        });
-        if (!res.ok) throw new Error('Gagal otentikasi Google Drive (HTTP ' + res.status + ')');
-        const data = await res.json();
-        return data.access_token;
+        for (let i = 0; i < 8; i++) {
+          const res = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body
+          });
+          if (res.ok) {
+            const data = await res.json();
+            return data.access_token;
+          }
+          await new Promise(r => setTimeout(r, 1500));
+        }
+        throw new Error('Gagal otentikasi ke Google Drive.');
+      }
+
+      async function ensureServiceWorker() {
+        if (!('serviceWorker' in navigator)) return false;
+        try {
+          await navigator.serviceWorker.register('./sw.js', { scope: './' });
+          await navigator.serviceWorker.ready;
+          if (!navigator.serviceWorker.controller) {
+            await new Promise((resolve) => {
+              const timer = setTimeout(resolve, 2500);
+              navigator.serviceWorker.addEventListener('controllerchange', () => {
+                clearTimeout(timer);
+                resolve();
+              }, { once: true });
+            });
+          }
+          return Boolean(navigator.serviceWorker.controller);
+        } catch (e) {
+          return false;
+        }
       }
 
       async function deleteFile() {
@@ -205,7 +231,7 @@
             return;
           }
           if (res.status !== 403 && res.status !== 429 && res.status < 500) break;
-          await new Promise(r => setTimeout(r, 2500));
+          await new Promise(r => setTimeout(r, 2000));
         }
 
         statusBox.textContent = '❌ Gagal menghapus file (HTTP ' + lastStatus + '). Coba tekan ulang sebentar lagi.';
@@ -213,8 +239,25 @@
         document.getElementById('btn-back').onclick = closeWin;
       }
 
+      async function setupFallbackDirectStream() {
+        const token = await getAccessToken();
+        const directApiUrl = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&acknowledgeAbuse=true&access_token=' + encodeURIComponent(token);
+        let retries = 0;
+        player.onerror = async () => {
+          if (retries >= 10) return;
+          retries++;
+          const savedTime = player.currentTime || 0;
+          await new Promise(r => setTimeout(r, 1500));
+          const freshTok = await getAccessToken();
+          player.src = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&acknowledgeAbuse=true&access_token=' + encodeURIComponent(freshTok);
+          player.currentTime = savedTime;
+          player.play().catch(() => {});
+        };
+        player.src = directApiUrl;
+      }
+
       async function run() {
-        if (!fileId) {
+        if (!fileId || !cid || !sec || !rt) {
           statusBox.textContent = '⚠️ Data tautan tidak lengkap. Silakan klik tombol langsung dari chat bot.';
           return;
         }
@@ -224,15 +267,29 @@
             return;
           }
 
-          // Stream langsung lewat jalur CDN Google (bebas kuota API & bebas batas waktu 1 jam)
-          const streamUrl = 'https://drive.usercontent.google.com/download?id=' + encodeURIComponent(fileId) + '&export=download&confirm=t';
+          const hasSW = await ensureServiceWorker();
           statusBox.style.display = 'none';
           videoWrap.style.display = 'block';
           speedBar.style.display = 'flex';
-          player.src = streamUrl;
+
+          if (hasSW) {
+            const q = new URLSearchParams({ cid, sec, rt });
+            player.src = './__stream/' + encodeURIComponent(fileId) + '?' + q.toString();
+            // Fallback otomatis jika Service Worker terputus di WebView tertentu
+            player.onerror = () => {
+              player.onerror = null;
+              setupFallbackDirectStream();
+            };
+          } else {
+            await setupFallbackDirectStream();
+          }
+
+          // Intent Chrome Android agar jika dibuka eksternal tetap masuk ke Instant Player ini (bukan halaman download GDrive!)
+          const noProto = fullCurrentUrl.replace(/^https?:\/\//, '');
+          const chromeIntent = 'intent://' + noProto + '#Intent;scheme=https;package=com.android.chrome;end';
 
           actions.innerHTML =
-            '<a class="btn btn-ext" href="' + streamUrl + '" target="_blank">🌐 Buka di Pemutar Eksternal / Chrome</a>' +
+            '<a class="btn btn-ext" id="btn-chrome" href="' + chromeIntent + '">🌐 Buka Layar Penuh di Chrome</a>' +
             '<button class="btn btn-del" id="btn-del-now">🗑️ Selesai Nonton? Hapus dari Drive</button>' +
             '<button class="btn btn-close" id="btn-close-now">Tutup</button>';
 
